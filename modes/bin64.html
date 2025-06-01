@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FFT Image Encoder/Decoder</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f5f5f5;
+      color: #222;
+    }
+    header {
+      background: #333;
+      color: white;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem;
+      flex-wrap: wrap;
+    }
+    .title {
+      font-size: 1.75rem;
+      font-weight: bold;
+    }
+    .nav-buttons {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .nav-buttons button {
+      background: #555;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.9rem;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+    .nav-buttons button:hover {
+      background: #777;
+    }
+    main {
+      max-width: 70%;
+      margin: 2rem auto;
+      padding: 0 1rem;
+    }
+    h1, h2 {
+      margin-top: 2rem;
+    }
+    p {
+      line-height: 1.3;
+    }
+    .section { display: none; padding: 10px; }
+    .section.active { display: block; }
+    canvas { border: 1px solid #ccc; display: block; margin: 10px 0; }
+    label { display: block; margin: 1em 0 0.5em; }
+    input[readonly], input[type="number"] { width: 12em; font-size: 1em; }
+    .container { display: flex; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="title" id="pageTitle">FFT Binary Encoder</div>
+    <a id="homeBtn" title="Home" href="../index.html" style="margin-right: 10px;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg">
+        <path d="M3 9.5L12 3L21 9.5V20C21 20.55 20.55 21 20 21H15C14.45 21 14 20.55 14 20V15C14 14.45 13.55 14 13 14H11C10.45 14 10 14.45 10 15V20C10 20.55 9.55 21 9 21H4C3.45 21 3 20.55 3 20V9.5Z"/>
+      </svg>
+    </a>
+    <div class="nav-buttons">
+      <button onclick="switchSection('encode')">Encode</button>
+      <button onclick="switchSection('decode')">Decode</button>
+    </div>
+  </header>
+  <main>
+    <!-- ENCODE SECTION -->
+    <div id="encode" class="section active">
+      <p><input type="file" id="enc_file" accept="image/*"></p>
+      <button id="enc_btn" disabled>Encode &amp; Download BIN</button>
+      <p><canvas id="enc_canvas"></canvas></p>
+    </div>
+
+    <!-- DECODE SECTION -->
+    <div id="decode" class="section">
+      <p><input type="file" id="dec_file" accept=".bin"></p>
+      <button id="dec_btn" disabled>Decode &amp; Show Image</button>
+      <button id="dec_dwl_btn" disabled>Download Image</button>
+      <p><canvas id="dec_canvas"></canvas></p>
+    </div>
+  </main>
+
+  <script>
+  // ── Section Toggle ───────────────────────────────────────
+  function switchSection(sec) {
+    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+    document.getElementById(sec).classList.add('active');
+    document.getElementById('pageTitle').textContent =
+      sec==='encode' ? 'FFT Binary Encoder' : 'FFT Binary Decoder';
+  }
+
+  // ── UI Elements ─────────────────────────────────────────
+  const encFile = document.getElementById('enc_file'),
+        encBtn  = document.getElementById('enc_btn'),
+        encCvs  = document.getElementById('enc_canvas'),
+        decFile = document.getElementById('dec_file'),
+        decBtn  = document.getElementById('dec_btn'),
+        decDwl  = document.getElementById('dec_dwl_btn'),
+        decCvs  = document.getElementById('dec_canvas');
+
+  // Enable buttons
+    // show image on file select
+  encFile.onchange = () => {
+    encBtn.disabled = !encFile.files.length;
+    if (!encFile.files.length) return;
+    const img = new Image();
+    img.onload = () => {
+      encCvs.width = img.width;
+      encCvs.height = img.height;
+      encCvs.getContext('2d').drawImage(img,0,0);
+    };
+    img.src = URL.createObjectURL(encFile.files[0]);
+  };
+
+  decFile.onchange = () => {
+    decBtn.disabled = !decFile.files.length;
+  };
+  
+  decFile.onchange = () => decBtn.disabled = !decFile.files.length;
+
+  // Enable encode button when an image is selected
+  encFile.onchange = () => {
+    encBtn.disabled = !encFile.files.length;
+    if (!encFile.files.length) return;
+    // preview
+    const img = new Image();
+    img.onload = () => {
+      encCvs.width = img.width;
+      encCvs.height = img.height;
+      encCvs.getContext('2d').drawImage(img,0,0);
+    };
+    img.src = URL.createObjectURL(encFile.files[0]);
+  };
+
+  // Enable decode button when a bin is selected
+  decFile.onchange = () => {
+    decBtn.disabled = !decFile.files.length;
+  };
+
+  // ── FFT ENCODE ROUTINES ──────────────────────────────────
+  class C { constructor(re,im){this.re=re; this.im=im;} 
+    add(o){return new C(this.re+o.re,this.im+o.im);}
+    sub(o){return new C(this.re-o.re,this.im-o.im);}
+    mul(o){return new C(this.re*o.re - this.im*o.im, this.re*o.im + this.im*o.re);}
+    abs(){return Math.hypot(this.re,this.im);}
+    phase(){return Math.atan2(this.im,this.re);}
+  }
+
+  function fft1D(a) {
+    const N=a.length;
+    if(N<2) return a;
+    const ev=fft1D(a.filter((_,i)=>i%2===0)),
+          od=fft1D(a.filter((_,i)=>i%2===1)),
+          out=Array(N);
+    for(let k=0;k<N/2;k++){
+      const tw=new C(Math.cos(-2*Math.PI*k/N),Math.sin(-2*Math.PI*k/N)).mul(od[k]);
+      out[k]=ev[k].add(tw);
+      out[k+N/2]=ev[k].sub(tw);
+    }
+    return out;
+  }
+
+  function fft2D(mat,W,H) {
+    const tmp=Array(H), res=Array(H);
+    for(let y=0;y<H;y++){
+      const row=mat[y].map(v=>new C(v,0)), f=fft1D(row);
+      tmp[y]=f;
+    }
+    for(let x=0;x<W;x++){
+      const col=tmp.map(r=>r[x]), f=fft1D(col);
+      for(let y=0;y<H;y++){
+        if(!res[y]) res[y]=Array(W);
+        res[y][x]=f[y];
+      }
+    }
+    return res;
+  }
+
+  function fftshift2D(arr,W,H) {
+    const out=Array(H).fill().map(()=>Array(W));
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+      out[y][x]=arr[(y+H/2)%H][(x+W/2)%W];
+    }
+    return out;
+  }
+  
+  // ── ENCODE & DOWNLOAD BIN ────────────────────────────────
+  encBtn.onclick = async () => {
+    const imgFile = encFile.files[0];
+    const img = new Image();
+    img.src = URL.createObjectURL(imgFile);
+    await img.decode();
+
+    const w=img.width, h=img.height;
+    if(w>4096||h>4096) return alert("Max 4096×4096");
+    const PW=1<<Math.ceil(Math.log2(w)),
+          PH=1<<Math.ceil(Math.log2(h));
+
+    // draw into padded canvas
+    const ctx=encCvs.getContext('2d');
+    ctx.drawImage(img,0,0);
+
+    const pix=ctx.getImageData(0,0,PW,PH).data;
+    // build per-channel float arrays
+    const magR=new Float64Array(PW*PH),
+          magG=new Float64Array(PW*PH),
+          magB=new Float64Array(PW*PH),
+          phR =new Float64Array(PW*PH),
+          phG =new Float64Array(PW*PH),
+          phB =new Float64Array(PW*PH);
+
+    // extract RGB planes
+    const Rm=Array(PH), Gm=Array(PH), Bm=Array(PH);
+    for(let y=0;y<PH;y++){
+      Rm[y]=[]; Gm[y]=[]; Bm[y]=[];
+      for(let x=0;x<PW;x++){
+        const i=4*(y*PW+x);
+        Rm[y][x]=pix[i];
+        Gm[y][x]=pix[i+1];
+        Bm[y][x]=pix[i+2];
+      }
+    }
+
+    // FFT + shift
+    const FR=fftshift2D(fft2D(Rm,PW,PH),PW,PH),
+          FG=fftshift2D(fft2D(Gm,PW,PH),PW,PH),
+          FB=fftshift2D(fft2D(Bm,PW,PH),PW,PH);
+
+    // fill mag & phase arrays
+    for(let y=0, idx=0; y<PH; y++){
+      for(let x=0; x<PW; x++, idx++){
+        const cR=FR[y][x], cG=FG[y][x], cB=FB[y][x];
+        magR[idx]=cR.abs(); phR[idx]=cR.phase();
+        magG[idx]=cG.abs(); phG[idx]=cG.phase();
+        magB[idx]=cB.abs(); phB[idx]=cB.phase();
+      }
+    }
+
+    // prepare binary buffer
+    // 4 bytes header + 6*N * 8 bytes
+    const N=PW*PH,
+          headerBytes=4,
+          floatBytes=8,
+          totalBytes=headerBytes + 6*N*floatBytes;
+    const buf=new ArrayBuffer(totalBytes);
+    const dv=new DataView(buf);
+    // write bitPacked dims
+    const bitPacked=(w<<12)|h;
+    dv.setUint32(0, bitPacked, true);
+    // write floats
+    let offset=4;
+    function writeArr(arr){
+      for(let i=0;i<arr.length;i++){
+        dv.setFloat64(offset, arr[i], true);
+        offset+=8;
+      }
+    }
+    writeArr(magR);
+    writeArr(magG);
+    writeArr(magB);
+    writeArr(phR);
+    writeArr(phG);
+    writeArr(phB);
+
+    // trigger download
+    const blob=new Blob([buf],{type:'application/octet-stream'});
+    const a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='EncodedImage.bin';
+    a.click();
+  };
+
+  // ── INVERSE FFT ROUTINES ────────────────────────────────────
+  function dec_fft(re,im){
+    const N=re.length; if(N<2) return;
+    const H=N>>1;
+    const rE=new Float64Array(H), iE=new Float64Array(H),
+          rO=new Float64Array(H), iO=new Float64Array(H);
+    for(let k=0;k<H;k++){
+      rE[k]=re[2*k]; iE[k]=im[2*k];
+      rO[k]=re[2*k+1]; iO[k]=im[2*k+1];
+    }
+    dec_fft(rE,iE); dec_fft(rO,iO);
+    for(let k=0;k<H;k++){
+      const ang=-2*Math.PI*k/N, c=Math.cos(ang), s=Math.sin(ang),
+            tr=c*rO[k]-s*iO[k], ti=s*rO[k]+c*iO[k];
+      re[k]=rE[k]+tr;      im[k]=iE[k]+ti;
+      re[k+H]=rE[k]-tr;    im[k+H]=iE[k]-ti;
+    }
+  }
+  function dec_ifft(re,im){
+    for(let i=0;i<im.length;i++) im[i]=-im[i];
+    dec_fft(re,im);
+    const N=re.length;
+    for(let i=0;i<N;i++){ re[i]/=N; im[i]=-im[i]/N; }
+  }
+  function dec_ifft2D(re,im,W,H){
+    for(let y=0;y<H;y++){
+      dec_ifft(re.subarray(y*W,(y+1)*W), im.subarray(y*W,(y+1)*W));
+    }
+    for(let x=0;x<W;x++){
+      const colR=new Float64Array(H), colI=new Float64Array(H);
+      for(let y=0;y<H;y++){
+        colR[y]=re[y*W+x]; colI[y]=im[y*W+x];
+      }
+      dec_ifft(colR,colI);
+      for(let y=0;y<H;y++){
+        re[y*W+x]=colR[y]; im[y*W+x]=colI[y];
+      }
+    }
+  }
+  function ifftshift2D(arr,W,H){
+    const out=Array(H).fill().map(()=>Array(W));
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+      out[y][x]=arr[(y+H/2)%H][(x+W/2)%W];
+    }
+    return out;
+  }
+
+  // ── DECODE & SHOW IMAGE ────────────────────────────────────
+  decBtn.onclick = () => {
+    const file = decFile.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const buf = reader.result;
+      const dv  = new DataView(buf);
+
+      // 1) Read header
+      const bitPacked = dv.getUint32(0, true);
+      const w = bitPacked >> 12;
+      const h = bitPacked & 0xFFF;
+
+      // 2) Recompute padded dims
+      const PW = 1 << Math.ceil(Math.log2(w));
+      const PH = 1 << Math.ceil(Math.log2(h));
+      const N  = PW * PH;
+
+      // 3) Read back floats
+      let offset = 4;
+      function readArr() {
+        const arr = new Float64Array(N);
+        for (let i = 0; i < N; i++) {
+          arr[i] = dv.getFloat64(offset, true);
+          offset += 8;
+        }
+        return arr;
+      }
+      const magR = readArr(), magG = readArr(), magB = readArr();
+      const phR  = readArr(), phG  = readArr(), phB  = readArr();
+
+      // 4) Reconstruct complex 2D arrays
+      const R2D = Array(PH), I2D = Array(PH),
+            G2D = Array(PH), Gi2D= Array(PH),
+            B2D = Array(PH), Bi2D= Array(PH);
+      for (let y = 0; y < PH; y++) {
+        R2D[y]=[]; I2D[y]=[];
+        G2D[y]=[]; Gi2D[y]=[];
+        B2D[y]=[]; Bi2D[y]=[];
+        for (let x = 0; x < PW; x++) {
+          const idx = y*PW + x;
+          const mR = magR[idx], mG = magG[idx], mB = magB[idx];
+          const aR = phR[idx],  aG = phG[idx],  aB = phB[idx];
+          R2D[y][x] = mR*Math.cos(aR); I2D[y][x] = mR*Math.sin(aR);
+          G2D[y][x] = mG*Math.cos(aG); Gi2D[y][x] = mG*Math.sin(aG);
+          B2D[y][x] = mB*Math.cos(aB); Bi2D[y][x] = mB*Math.sin(aB);
+        }
+      }
+
+      // 5) Shift back & flatten
+      function shiftInv(mat) {
+        const out = Array(PH).fill().map(()=>Array(PW));
+        for(let y=0;y<PH;y++) for(let x=0;x<PW;x++){
+          out[y][x] = mat[(y+PH/2|0)%PH][(x+PW/2|0)%PW];
+        }
+        return out;
+      }
+      function flatten(mat) {
+        const a = new Float64Array(N);
+        for (let y=0, k=0; y<PH; y++)
+          for (let x=0; x<PW; x++, k++)
+            a[k] = mat[y][x];
+        return a;
+      }
+
+      const Rf = flatten(shiftInv(R2D)), If = flatten(shiftInv(I2D)),
+            Gf = flatten(shiftInv(G2D)), Gi = flatten(shiftInv(Gi2D)),
+            Bf = flatten(shiftInv(B2D)), Bi = flatten(shiftInv(Bi2D));
+
+      // 6) IFFT each
+      dec_ifft2D(Rf,If,PW,PH);
+      dec_ifft2D(Gf,Gi,PW,PH);
+      dec_ifft2D(Bf,Bi,PW,PH);
+
+      // 7) Draw top-left w×h
+      decCvs.width = w;
+      decCvs.height= h;
+      const ctx2 = decCvs.getContext('2d');
+      const imgD = ctx2.createImageData(w,h);
+
+      for (let y=0; y<h; y++){
+        for (let x=0; x<w; x++){
+          const src = y*PW + x;
+          const dst = 4*(y*w + x);
+          imgD.data[dst  ] = Math.max(0,Math.min(255,Math.round(Rf[src])));
+          imgD.data[dst+1] = Math.max(0,Math.min(255,Math.round(Gf[src])));
+          imgD.data[dst+2] = Math.max(0,Math.min(255,Math.round(Bf[src])));
+          imgD.data[dst+3] = 255;
+        }
+      }
+      ctx2.putImageData(imgD,0,0);
+      decDwl.disabled = false;
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  // ── DOWNLOAD DECODED IMAGE ────────────────────────────────
+  decDwl.onclick = () => {
+    const a = document.createElement('a');
+    a.href = decCvs.toDataURL();
+    a.download = 'DecodedImage.png';
+    a.click();
+  };
+  </script>
+</body>
+</html>
